@@ -1,0 +1,10 @@
+flax
+jax
+jaxlib
+jax_dataclasses
+tqdm
+datargs>=0.10.0
+fannypack
+torch
+# tensorflow is needed for tensorboard logging in JAX
+tensorflow
