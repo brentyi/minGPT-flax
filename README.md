@@ -37,6 +37,7 @@ A minimal transformer implementation for seq2seq modeling in Flax/JAX. Written f
             python eval_char.py --help
             ```
     - [ ] BPE-based language model
+- [ ] Tangentially related reach goals
     - [ ] Vision transformer
     - [ ] Transformer w/ Perceiver IO-style latent vectors?
     - [ ] Weight loading from OpenAI's released model?

@@ -106,6 +106,8 @@ class OptimizerConfig:
 
 @jax_dataclasses.pytree_dataclass
 class TrainState:
+    """GPT training state. Makes a somewhat strong assumption for learning rate
+    scheduling: that we always use the same batch size and input token count."""
     model: GPT = jax_dataclasses.static_field()
     params: flax.core.FrozenDict
 
@@ -115,9 +117,6 @@ class TrainState:
 
     prng_key: Any
     steps: int
-
-    # Number of tokens we've processed. Used for learning rate scheduler.
-    n_tokens: int
 
     @staticmethod
     def initialize(
@@ -150,7 +149,6 @@ class TrainState:
             optimizer_config=optimizer_config,
             prng_key=prng_key1,
             steps=0,
-            n_tokens=0,
         )
 
     @jax.jit
@@ -194,7 +192,13 @@ class TrainState:
 
         # Apply learning rate scheduler
         # Note the negative sign needed to *minimize* the loss
-        learning_rate = self.optimizer_config.lr_scheduler(self.n_tokens)
+        #
+        # Somewhat strong assumption: we always use the same batch and token counts. We
+        # can also explicitly track the token count, but when implemented naively this
+        # overflows pretty quickly
+        learning_rate = self.optimizer_config.lr_scheduler(
+            n_tokens=jnp.array(self.steps, dtype=jnp.float32) * B * T
+        )
         updates = jax.tree_map(lambda x: -learning_rate * x, updates)
 
         # Log data for Tensorboard
@@ -216,7 +220,6 @@ class TrainState:
             state_new.optimizer_state = optimizer_state_new
             state_new.prng_key = prng_key_new
             state_new.steps += 1
-            state_new.n_tokens += B * T
         return state_new, log_data
 
     @jax.jit
