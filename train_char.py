@@ -1,6 +1,7 @@
 """Script for training a GPT model on some text corpus. Pass in --help flag for options."""
 
 import dataclasses
+import dcargs
 import datetime
 import pathlib
 
@@ -104,4 +105,4 @@ def main(train_config: TrainConfig) -> None:
 
 
 if __name__ == "__main__":
-    main(utils.parse_args(TrainConfig))
+    main(dcargs.parse(TrainConfig))

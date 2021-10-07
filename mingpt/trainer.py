@@ -108,6 +108,7 @@ class OptimizerConfig:
 class TrainState:
     """GPT training state. Makes a somewhat strong assumption for learning rate
     scheduling: that we always use the same batch size and input token count."""
+
     model: GPT = jax_dataclasses.static_field()
     params: flax.core.FrozenDict
 

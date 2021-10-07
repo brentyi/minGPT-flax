@@ -3,13 +3,14 @@
 import dataclasses
 from typing import Any, Dict, Tuple, Union, cast
 
+import dcargs
 import fannypack
 import jax
 import numpy as onp
 from jax import numpy as jnp
 from tqdm.auto import tqdm
 
-from mingpt import experiment_files, trainer, utils
+from mingpt import experiment_files, trainer
 from train_char import make_train_state
 
 PRNGKey = Union[Any, jnp.ndarray]
@@ -122,4 +123,4 @@ def main(args: Args):
 
 
 if __name__ == "__main__":
-    main(utils.parse_args(Args))
+    main(dcargs.parse(Args))
