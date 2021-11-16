@@ -4,13 +4,13 @@ import dataclasses
 from typing import Any, Dict, Tuple, Union, cast
 
 import dcargs
-import fannypack
 import jax
 import numpy as onp
 from jax import numpy as jnp
 from tqdm.auto import tqdm
 
-from mingpt import experiment_files, trainer
+from mingpt import trainer
+import fifteen
 from train_char import make_train_state
 
 PRNGKey = Union[Any, jnp.ndarray]
@@ -82,10 +82,7 @@ def sample_from_logits(
 
 
 def main(args: Args):
-
-    fannypack.utils.pdb_safety_net()
-
-    experiment = experiment_files.ExperimentFiles(
+    experiment = fifteen.experiments.Experiment(
         identifier=args.experiment_name
     ).assert_exists()
 
@@ -123,4 +120,5 @@ def main(args: Args):
 
 
 if __name__ == "__main__":
+    fifteen.utils.pdb_safety_net()
     main(dcargs.parse(Args))

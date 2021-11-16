@@ -5,10 +5,9 @@ https://github.com/karpathy/minGPT/blob/master/mingpt/model.py
 from typing import Dict
 
 import numpy as onp
-from torch.utils.data import Dataset
 
 
-class CharDataset(Dataset):
+class CharDataset:
     """Character dataset. Based on code from Karpathy's `play_char.ipynb`."""
 
     def __init__(self, data: str, block_size: int):

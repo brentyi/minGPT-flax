@@ -9,6 +9,7 @@ import dataclasses
 import functools
 from typing import Any, Dict, Tuple, Union
 
+import fifteen
 import flax
 import jax
 import jax.flatten_util
@@ -18,7 +19,6 @@ import optax
 from flax import linen as nn
 from jax import numpy as jnp
 
-from .experiment_files import TensorboardLogData
 from .model import GPT, GPTConfig
 
 PRNGKey = Union[Any, jnp.ndarray]
@@ -155,7 +155,7 @@ class TrainState:
     @jax.jit
     def training_step(
         self, x: jnp.ndarray, y: jnp.ndarray
-    ) -> Tuple["TrainState", TensorboardLogData]:
+    ) -> Tuple["TrainState", fifteen.experiments.TensorboardLogData]:
         B, T = x.shape
         assert x.shape == y.shape
 
@@ -203,7 +203,7 @@ class TrainState:
         updates = jax.tree_map(lambda x: -learning_rate * x, updates)
 
         # Log data for Tensorboard
-        log_data = TensorboardLogData(
+        log_data = fifteen.experiments.TensorboardLogData(
             scalars={
                 "train/loss": loss,
                 "train/gradient_norm": optax.global_norm(grads),

@@ -4,7 +4,6 @@ jaxlib
 jax_dataclasses
 tqdm
 dcargs
-fannypack
-torch
+git+https://github.com/brentyi/fifteen.git
 # tensorflow is needed for tensorboard logging in JAX
 tensorflow

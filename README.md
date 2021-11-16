@@ -2,6 +2,48 @@
 
 A minimal transformer implementation for seq2seq modeling in Flax/JAX. Written for educational purposes :school:
 
+## Usage
+
+Install:
+```
+pip install -r requirements.txt
+```
+
+Train:
+```
+$ python train_char.py --help
+
+usage: train_char.py [-h] --dataset-path PATH [--experiment-name STR] [--restore-checkpoint] [--max-epochs INT] [--batch-size INT]
+                     [--block-size INT]
+
+required arguments:
+  --dataset-path PATH
+
+optional arguments:
+  -h, --help            show this help message and exit
+  --experiment-name STR
+                        (default: char_{timestamp})
+  --restore-checkpoint  (default: False)
+  --max-epochs INT      (default: 1000)
+  --batch-size INT      (default: 128)
+  --block-size INT      (default: 128)
+```
+
+Eval (sampling):
+```
+$ python eval_char.py
+
+usage: eval_char.py [-h] --experiment-name STR [--sample-steps INT] [--sample-from-top-k INT]
+
+required arguments:
+  --experiment-name STR
+
+optional arguments:
+  -h, --help            show this help message and exit
+  --sample-steps INT    (default: 500)
+  --sample-from-top-k INT
+```
+
 
 ## Links
 
