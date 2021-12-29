@@ -1,16 +1,17 @@
 """Script for autoregressive sampling from our model. Pass in --help flag for options."""
 
 import dataclasses
+import pathlib
 from typing import Any, Dict, Tuple, Union, cast
 
 import dcargs
+import fifteen
 import jax
 import numpy as onp
 from jax import numpy as jnp
 from tqdm.auto import tqdm
 
 from mingpt import trainer
-import fifteen
 from train_char import make_train_state
 
 PRNGKey = Union[Any, jnp.ndarray]
@@ -54,7 +55,11 @@ def sample(
             padded_conditioner[0, :] = out[i - block_size : i]
             predicted_token_idx = -1
 
-        logits = train_state.predict(cast(jnp.ndarray, padded_conditioner))
+        logits = jax.jit(train_state.model.apply, static_argnames=("deterministic",))(
+            train_state.params,
+            cast(jnp.ndarray, padded_conditioner),
+            deterministic=True,
+        )
 
         assert logits.shape == (1, block_size, vocab_size)
         logits_onp = onp.array(logits[0, predicted_token_idx, :]) / temperature
@@ -83,7 +88,7 @@ def sample_from_logits(
 
 def main(args: Args):
     experiment = fifteen.experiments.Experiment(
-        identifier=args.experiment_name
+        data_dir=pathlib.Path("./experiments/") / args.experiment_name
     ).assert_exists()
 
     # Read model metadata.

@@ -4,9 +4,7 @@ https://github.com/karpathy/minGPT/blob/master/mingpt/model.py
 
 import dataclasses
 from functools import partial
-from typing import Any, Protocol
 
-import jax
 import numpy as onp
 from flax import linen as nn
 from jax import numpy as jnp
@@ -14,16 +12,16 @@ from jax import numpy as jnp
 
 @dataclasses.dataclass
 class GPTConfig:
-    # Input size config
+    # Input size config.
     vocab_size: int
     block_size: int
 
-    # Transformer block config
+    # Transformer block config.
     n_head: int
     resid_pdrop: float
     attn_pdrop: float
 
-    # Overall config
+    # Overall config.
     n_layer: int
     embd_dim: int
     embd_pdrop: float
@@ -35,11 +33,11 @@ class GPTConfig:
         return GPTConfig(
             vocab_size=vocab_size,
             block_size=block_size,
-            # Transformer block config
+            # Transformer block config.
             n_head=12,
             attn_pdrop=0.1,
             resid_pdrop=0.1,
-            # Overall config
+            # Overall config>
             n_layer=12,
             embd_dim=768,
             embd_pdrop=0.1,
@@ -68,21 +66,22 @@ class CausalSelfAttention(nn.Module):
     n_head: int
     resid_pdrop: float
     attn_pdrop: float
-    embd_dim: int  # not actually needed, just used for assertion on input shape
+    embd_dim: int  # Not actually needed, just used for assertion on input shape.
 
     @nn.compact
     def __call__(self, x: jnp.ndarray, deterministic: bool) -> jnp.ndarray:  # type: ignore
-        # Input shape should be (batch size, token count, channels)
+        # Input shape should be (batch size, token count, channels).
         B, T, C = x.shape
         assert C == self.embd_dim
 
-        # Token dimension should be the same as embedding dimension
+        # Token dimension should be the same as embedding dimension.
         assert (
             C % self.n_head == 0
         ), "Embedding size should be evenly divisible by head count"
         head_size: int = C // self.n_head
 
-        # Apply linear mappings to compute key, query, values for all heads in the batch
+        # Apply linear mappings to compute key, query, values for all heads in the
+        # batch.
         def kqv_linear_map(x: jnp.ndarray) -> jnp.ndarray:
             return DenseWithInit(features=C)(x).reshape((B, T, self.n_head, head_size))
 
@@ -91,34 +90,34 @@ class CausalSelfAttention(nn.Module):
         v = kqv_linear_map(x)
         assert k.shape == q.shape == v.shape == (B, T, self.n_head, head_size)
 
-        # For computing QK^T
+        # For computing QK^T:
         #     Inputs are: (B, T, nh, hs), (B, T, nh, hs)
         #     Desired output is: (B, nh, T, T)
         # Dividing by square root of the head size results in better gradients for
-        # softmax (more values on the locally linear area)
+        # softmax (more values on the locally linear area).
         att = jnp.einsum("bihs,bkhs->bhik", k, q) / onp.sqrt(head_size)
         assert att.shape == (B, self.n_head, T, T)
 
-        # Create and apply a causal mask
+        # Create and apply a causal mask.
         mask = onp.tril(onp.ones((T, T), dtype=bool)).reshape((1, 1, T, T))
         att = jnp.where(mask, att, -jnp.inf)
         assert att.shape == (B, self.n_head, T, T)
 
-        # Softmax over last axis
+        # Softmax over last axis.
         att = nn.softmax(att, axis=-1)
         assert att.shape == (B, self.n_head, T, T)
 
-        # Dropout
+        # Dropout.
         att = nn.Dropout(rate=self.attn_pdrop, deterministic=deterministic)(att)
 
-        # For computing softmax(QK^T/sqrt(head_size))V
+        # For computing softmax(QK^T/sqrt(head_size)).
         #     Inputs are: (B, nh, T, T), (B, T, nh, hs)
         #     Desired output is: (B, T, nh, hs)
         # note that softmax was applied to the final T dimension of `att`!
         y = jnp.einsum("bnti,binh->btnh", att, v)
         y = y.reshape((B, T, C))
 
-        # Output projection, dropout
+        # Output projection, dropout.
         y = DenseWithInit(features=C)(y)
         y = nn.Dropout(rate=self.resid_pdrop, deterministic=deterministic)(y)
         assert y.shape == x.shape == (B, T, C)
@@ -164,14 +163,14 @@ class GPT(nn.Module):
         ), "Cannot forward, model block size is exhausted"
         assert idx.dtype == jnp.int32
 
-        # Compute token embeddings
+        # Compute token embeddings.
         token_embeddings = EmbedWithInit(
             num_embeddings=self.config.vocab_size,
             features=self.config.embd_dim,
         )(idx)
         assert token_embeddings.shape == (B, T, self.config.embd_dim)
 
-        # Compute positional embeddings
+        # Compute positional embeddings.
         pos_embedding_variable = self.variable(
             "params",
             "position_embeddings",
@@ -181,7 +180,7 @@ class GPT(nn.Module):
         pos_embeddings = pos_embedding_variable.value[:T, :]
         assert pos_embeddings.shape == token_embeddings.shape[1:]
 
-        # Apply transformer blocks
+        # Apply transformer blocks.
         x = token_embeddings + pos_embeddings[None, :, :]
         x = nn.Dropout(rate=self.config.embd_pdrop, deterministic=deterministic)(x)
         for _ in range(self.config.n_layer):
@@ -190,6 +189,6 @@ class GPT(nn.Module):
         logits = DenseWithInit(features=self.config.vocab_size, use_bias=False)(x)
 
         # Andrej's implementation also (optionally) computes a loss here, but this seems
-        # like a weird place to do that
+        # like a weird place to do that.
         assert logits.shape == (B, T, self.config.vocab_size)
         return logits

@@ -16,7 +16,6 @@ import jax.flatten_util
 import jax_dataclasses
 import numpy as onp
 import optax
-from flax import linen as nn
 from jax import numpy as jnp
 
 from .model import GPT, GPTConfig
@@ -32,7 +31,8 @@ class OptimizerConfig:
     adam_b1: float = 0.9
     adam_b2: float = 0.95
 
-    # These two numbers come from the GPT-3 paper, but may not be good defaults elsewhere
+    # These two numbers come from the GPT-3 paper, but may not be good defaults
+    # elsewhere.
     warmup_tokens: int = int(375e6)
     final_tokens: int = int(260e9)  # (at what point we reach 10% of original LR)
 
@@ -128,17 +128,17 @@ class TrainState:
 
         prng_key0, prng_key1 = jax.random.split(jax.random.PRNGKey(seed))
 
-        # Initialize model
+        # Initialize model.
         model = GPT(config=gpt_config)
         dummy_input = onp.zeros(
-            # shape is (B, T)... neither should matter
+            # Shape is (B, T)... neither should matter.
             (1, 1),
-            # inputs are integer indices
+            # Inputs are integer indices.
             dtype=jnp.int32,
         )
         params = model.init(prng_key0, dummy_input, deterministic=True)
 
-        # Initialize optimizer
+        # Initialize optimizer.
         optimizer_unit_lr = optimizer_config.make_optimizer_no_lr()
         optimizer_state = optimizer_unit_lr.init(params)
 
@@ -152,17 +152,28 @@ class TrainState:
             steps=0,
         )
 
-    @jax.jit
+    @functools.partial(
+        jax.jit,
+        donate_argnums=(0,),  # By default, old training state will be deleted.
+    )
     def training_step(
-        self, x: jnp.ndarray, y: jnp.ndarray
+        self, minibatch: jnp.ndarray
     ) -> Tuple["TrainState", fifteen.experiments.TensorboardLogData]:
-        B, T = x.shape
-        assert x.shape == y.shape
+        B = minibatch.shape[0]
+        T = self.model.config.block_size
+        assert minibatch.shape == (B, T + 1)
+        assert jnp.issubdtype(
+            minibatch.dtype, jnp.integer
+        ), "Training inputs should be integer token indices!"
 
-        # Split PRNG key
+        # Offset inputs/outputs; goal is next-token prediction.
+        x = minibatch[:, :-1]
+        y = minibatch[:, 1:]
+
+        # Split PRNG key.
         prng_key_dropout, prng_key_new = jax.random.split(self.prng_key)
 
-        # Define cross-entropy loss
+        # Define cross-entropy loss.
         def compute_loss(
             params: flax.core.FrozenDict,
         ) -> Tuple[jnp.ndarray, jnp.ndarray]:
@@ -183,7 +194,7 @@ class TrainState:
             assert ce_loss.shape == (B, T)
             return jnp.mean(ce_loss), y_pred_logits
 
-        # Backprop + parameter update
+        # Backprop + parameter update.
         (loss, y_pred_logits), grads = jax.value_and_grad(compute_loss, has_aux=True)(
             self.params
         )
@@ -191,18 +202,18 @@ class TrainState:
             grads, self.optimizer_state, self.params
         )
 
-        # Apply learning rate scheduler
-        # Note the negative sign needed to *minimize* the loss
+        # Apply learning rate scheduler. Note the negative sign needed to *minimize* the
+        # loss.
         #
         # Somewhat strong assumption: we always use the same batch and token counts. We
-        # can also explicitly track the token count, but when implemented naively this
-        # overflows pretty quickly
+        # could also explicitly track the token count, but when implemented naively this
+        # overflows pretty quickly.
         learning_rate = self.optimizer_config.lr_scheduler(
             n_tokens=jnp.array(self.steps, dtype=jnp.float32) * B * T
         )
         updates = jax.tree_map(lambda x: -learning_rate * x, updates)
 
-        # Log data for Tensorboard
+        # Log data for Tensorboard.
         log_data = fifteen.experiments.TensorboardLogData(
             scalars={
                 "train/loss": loss,
@@ -210,19 +221,14 @@ class TrainState:
                 "train/learning_rate": learning_rate,
             },
             histograms={
-                "train/updates": jax.flatten_util.ravel_pytree(updates)[0],
                 "train/y_pred_logits": y_pred_logits,
             },
         )
 
-        # Return updated state
+        # Return updated state.
         with jax_dataclasses.copy_and_mutate(self) as state_new:
             state_new.params = optax.apply_updates(self.params, updates)
             state_new.optimizer_state = optimizer_state_new
             state_new.prng_key = prng_key_new
             state_new.steps += 1
         return state_new, log_data
-
-    @jax.jit
-    def predict(self, x: jnp.ndarray) -> jnp.ndarray:
-        return self.model.apply(self.params, x, deterministic=True)

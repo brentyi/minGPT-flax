@@ -16,7 +16,7 @@ class TrainConfig:
     experiment_name: str = "char_" + fifteen.utils.timestamp()
     restore_checkpoint: bool = False
     max_epochs: int = 1000
-    batch_size: int = 128
+    minibatch_size: int = 128
     block_size: int = 128
 
 
@@ -50,12 +50,15 @@ def make_train_state(vocab_size: int, block_size: int) -> trainer.TrainState:
 
 
 def main(train_config: TrainConfig) -> None:
-    experiment = fifteen.experiments.Experiment(identifier=train_config.experiment_name)
+    experiment = fifteen.experiments.Experiment(
+        data_dir=pathlib.Path("./experiments/") / train_config.experiment_name
+    )
 
     # Block size = spatial extent of the model.
     with open(train_config.dataset_path, "r") as f:
         train_dataset = data.CharDataset(
-            data=f.read()[:-1], block_size=train_config.block_size
+            data=f.read()[:-1],
+            block_size=train_config.block_size,
         )
 
     # Write some metadata -- will need these to recreate the model at eval time.
@@ -73,18 +76,17 @@ def main(train_config: TrainConfig) -> None:
 
     train_dataloader = fifteen.data.DataLoader(
         dataset=train_dataset,
-        batch_size=train_config.batch_size,
-        num_workers=1,  # The entire dataset is in-memory, so this should be very fast.
+        minibatch_size=train_config.minibatch_size,
+        num_workers=0,  # The entire dataset is in-memory, so we can skip parallelism.
     )
     for epoch in range(train_config.max_epochs):
 
-        # Save checkpoint at the start of each epoch. We could just do the learnable
-        # parameters, but bundling up the whole training state is a bit easier.
+        # Save checkpoint at the start of each epoch. We could also do just the
+        # learnable parameters, but bundling up the whole training state is easier.
         experiment.save_checkpoint(train_state, step=train_state.steps)
 
-        for batch in tqdm(train_dataloader.minibatches(epoch)):
-            x, y = batch
-            train_state, log_data = train_state.training_step(x=x, y=y)
+        for minibatch in tqdm(train_dataloader.minibatches(epoch)):
+            train_state, log_data = train_state.training_step(minibatch)
 
             # Log to Tensorboard.
             experiment.log(
