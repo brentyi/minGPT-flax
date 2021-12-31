@@ -1,10 +1,11 @@
 """Script for training a GPT model on some text corpus. Pass in --help flag for options."""
-
 import dataclasses
 import pathlib
 
 import dcargs
 import fifteen
+import jax
+import jax_dataclasses as jdc
 from tqdm.auto import tqdm
 
 from mingpt import data, model, trainer
@@ -53,8 +54,13 @@ def main(train_config: TrainConfig) -> None:
     experiment = fifteen.experiments.Experiment(
         data_dir=pathlib.Path("./experiments/") / train_config.experiment_name
     )
+    devices = jax.local_devices()
+    device_count = jax.local_device_count()
+    assert (
+        train_config.minibatch_size % device_count == 0
+    ), f"Batch size {train_config.minibatch_size} must be divisible by {device_count}."
 
-    # Block size = spatial extent of the model.
+    # Load dataset.
     with open(train_config.dataset_path, "r") as f:
         train_dataset = data.CharDataset(
             data=f.read()[:-1],
@@ -66,37 +72,63 @@ def main(train_config: TrainConfig) -> None:
     experiment.write_metadata("stoi", train_dataset.stoi)
     experiment.write_metadata("itos", train_dataset.itos)
 
-    # Train!
+    # Initialize training state, and replicate across each GPU.
     train_state = make_train_state(
         vocab_size=train_dataset.vocab_size,
         block_size=train_dataset.block_size,
     )
     if train_config.restore_checkpoint:
         train_state = experiment.restore_checkpoint(train_state)
+    sharded_train_state: trainer.TrainState = jax.device_put_replicated(
+        train_state, devices=devices
+    )
+    del train_state
 
+    # Give each device a different PRNG key; this makes dropout masks unique.
+    with jdc.copy_and_mutate(sharded_train_state) as sharded_train_state:
+        sharded_train_state.prng_key = jax.random.split(
+            sharded_train_state.prng_key[0], num=device_count
+        )
+
+    # Run training loop.
     train_dataloader = fifteen.data.DataLoader(
         dataset=train_dataset,
         minibatch_size=train_config.minibatch_size,
         num_workers=0,  # The entire dataset is in-memory, so we can skip parallelism.
     )
     for epoch in range(train_config.max_epochs):
+        # Read training state from device 0 and save a checkpoint.
+        train_state = jax.tree_map(lambda x: x[0], sharded_train_state)
+        experiment.save_checkpoint(train_state, step=int(train_state.steps))
+        del train_state
 
-        # Save checkpoint at the start of each epoch. We could also do just the
-        # learnable parameters, but bundling up the whole training state is easier.
-        experiment.save_checkpoint(train_state, step=train_state.steps)
+        # Grab iterable over minibatches, which have leaf shapes of (minibatch_size, ...).
+        minibatches = train_dataloader.minibatches(shuffle_seed=epoch)
 
-        for minibatch in tqdm(train_dataloader.minibatches(epoch)):
-            train_state, log_data = train_state.training_step(minibatch)
+        # Convert leaf shapes to (device_count, minibatch_size // device_count, ...),
+        # and prefetch to (potentially) improve parallelization.
+        minibatches = fifteen.data.sharding_map(minibatches, devices=devices)
+        minibatches = fifteen.data.prefetching_map(minibatches)
+
+        for minibatch in tqdm(minibatches):
+            # Training step.
+            (
+                sharded_train_state,
+                sharded_log_data,
+            ) = sharded_train_state.parallelized_train_step(minibatch)
 
             # Log to Tensorboard.
             experiment.log(
-                log_data,
-                step=train_state.steps,
+                sharded_log_data.fix_sharded_scalars(),
+                step=sharded_train_state.steps[0],  # Pull step count from device 0.
                 log_scalars_every_n=10,
                 log_histograms_every_n=50,
             )
 
-    experiment.save_checkpoint(train_state, step=train_state.steps)
+    # Read training state from device 0 and save a checkpoint.
+    train_state = jax.tree_map(lambda x: x[0], sharded_train_state)
+    experiment.save_checkpoint(train_state, step=int(train_state.steps))
+    del train_state
 
 
 if __name__ == "__main__":

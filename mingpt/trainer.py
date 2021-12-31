@@ -13,10 +13,11 @@ import fifteen
 import flax
 import jax
 import jax.flatten_util
-import jax_dataclasses
+import jax_dataclasses as jdc
 import numpy as onp
 import optax
 from jax import numpy as jnp
+from typing_extensions import Annotated
 
 from .model import GPT, GPTConfig
 
@@ -104,20 +105,20 @@ class OptimizerConfig:
             return self.learning_rate
 
 
-@jax_dataclasses.pytree_dataclass
-class TrainState:
+@jdc.pytree_dataclass
+class TrainState(jdc.EnforcedAnnotationsMixin):
     """GPT training state. Makes a somewhat strong assumption for learning rate
     scheduling: that we always use the same batch size and input token count."""
 
-    model: GPT = jax_dataclasses.static_field()
+    model: GPT = jdc.static_field()
     params: flax.core.FrozenDict
 
-    optimizer_unit_lr: optax.GradientTransformation = jax_dataclasses.static_field()
+    optimizer_unit_lr: optax.GradientTransformation = jdc.static_field()
     optimizer_state: optax.OptState
-    optimizer_config: OptimizerConfig = jax_dataclasses.static_field()
+    optimizer_config: OptimizerConfig = jdc.static_field()
 
     prng_key: Any
-    steps: int
+    steps: Annotated[jnp.ndarray, (), jnp.integer]  # Scalar integer.
 
     @staticmethod
     def initialize(
@@ -149,16 +150,18 @@ class TrainState:
             optimizer_state=optimizer_state,
             optimizer_config=optimizer_config,
             prng_key=prng_key1,
-            steps=0,
+            steps=jnp.array(0),
         )
 
     @functools.partial(
-        jax.jit,
+        jax.pmap,
+        axis_name="device",
         donate_argnums=(0,),  # By default, old training state will be deleted.
     )
-    def training_step(
+    def parallelized_train_step(
         self, minibatch: jnp.ndarray
     ) -> Tuple["TrainState", fifteen.experiments.TensorboardLogData]:
+        # Batch size, token count.
         B = minibatch.shape[0]
         T = self.model.config.block_size
         assert minibatch.shape == (B, T + 1)
@@ -194,10 +197,11 @@ class TrainState:
             assert ce_loss.shape == (B, T)
             return jnp.mean(ce_loss), y_pred_logits
 
-        # Backprop + parameter update.
+        # Backprop + synchronized parameter update.
         (loss, y_pred_logits), grads = jax.value_and_grad(compute_loss, has_aux=True)(
             self.params
         )
+        grads = jax.lax.pmean(grads, axis_name="device")
         updates, optimizer_state_new = self.optimizer_unit_lr.update(
             grads, self.optimizer_state, self.params
         )
@@ -225,8 +229,14 @@ class TrainState:
             },
         )
 
+        # Synchronize scalars across devices.
+        log_data = fifteen.experiments.TensorboardLogData(
+            scalars=jax.lax.pmean(log_data.scalars, axis_name="device"),
+            histograms=log_data.histograms,
+        )
+
         # Return updated state.
-        with jax_dataclasses.copy_and_mutate(self) as state_new:
+        with jdc.copy_and_mutate(self) as state_new:
             state_new.params = optax.apply_updates(self.params, updates)
             state_new.optimizer_state = optimizer_state_new
             state_new.prng_key = prng_key_new
