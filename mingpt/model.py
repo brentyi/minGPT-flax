@@ -12,19 +12,16 @@ from jax import numpy as jnp
 
 @dataclasses.dataclass
 class GPTConfig:
-    # Input size config.
     vocab_size: int
-    block_size: int
+    block_size: int  # The history/context length of our sequence model.
 
-    # Transformer block config.
-    n_head: int
-    resid_pdrop: float
-    attn_pdrop: float
+    n_head: int  # Output size for multi-headed self-attention.
+    resid_pdrop: float  # Dropout probability.
+    attn_pdrop: float  # Dropout probability.
 
-    # Overall config.
     n_layer: int
     embd_dim: int
-    embd_pdrop: float
+    embd_pdrop: float  # Dropout probability.
 
     @staticmethod
     def make_gpt1_config(vocab_size: int, block_size: int) -> "GPTConfig":

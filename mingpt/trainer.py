@@ -7,7 +7,7 @@ Loosely based on code from Andrej Karpathy and Mikhail Grankin:
 
 import dataclasses
 import functools
-from typing import Any, Dict, Tuple, Union
+from typing import Dict, Tuple, Union
 
 import fifteen
 import flax
@@ -21,23 +21,20 @@ from typing_extensions import Annotated
 
 from .model import GPT, GPTConfig
 
-PRNGKey = Union[Any, jnp.ndarray]
-
 
 @dataclasses.dataclass
 class OptimizerConfig:
     learning_rate: float = 6e-4
-    lr_decay: bool = True
+    lr_decay: bool = True  # If decay is enabled, we use cosine annealing.
 
     adam_b1: float = 0.9
     adam_b2: float = 0.95
 
-    # These two numbers come from the GPT-3 paper, but may not be good defaults
-    # elsewhere.
-    warmup_tokens: int = int(375e6)
-    final_tokens: int = int(260e9)  # (at what point we reach 10% of original LR)
+    # Token counts come from the GPT-3 paper, but may not be good defaults elsewhere.
+    warmup_tokens: int = int(375e6)  # Tokens before reaching full learning rate.
+    final_tokens: int = int(260e9)  # At what point we reach 10% of original LR
 
-    weight_decay: float = 0.1
+    weight_decay: float = 0.1  # L2 regularization coefficient.
     grad_norm_clip: float = 1.0
 
     @staticmethod
@@ -117,7 +114,7 @@ class TrainState(jdc.EnforcedAnnotationsMixin):
     optimizer_state: optax.OptState
     optimizer_config: OptimizerConfig = jdc.static_field()
 
-    prng_key: Any
+    prng_key: jax.random.KeyArray
     steps: Annotated[jnp.ndarray, (), jnp.integer]  # Scalar integer.
 
     @staticmethod
@@ -156,11 +153,45 @@ class TrainState(jdc.EnforcedAnnotationsMixin):
     @functools.partial(
         jax.pmap,
         axis_name="device",
-        donate_argnums=(0,),  # By default, old training state will be deleted.
+        # Old training states are almost never reused, so we "donate" the argument to
+        # let XLA reuse the memory, allowing parameters to be updated in-place. Note
+        # that this will lead to runtime errors if an outdated training state object is
+        # operated on.
+        donate_argnums=(0,),
     )
-    def parallelized_train_step(
+    def sharded_train_step(
         self, minibatch: jnp.ndarray
     ) -> Tuple["TrainState", fifteen.experiments.TensorboardLogData]:
+        """Perform a parallelized training step. The training state that this is called
+        on should be sharded, eg already distributed on multiple devices.
+
+        Returns the updated (sharded) training state."""
+        return self._train_step(minibatch, is_pmapped=True)
+
+    @functools.partial(
+        jax.jit,
+        # Old training states are almost never reused, so we "donate" the argument to
+        # let XLA reuse the memory, allowing parameters to be updated in-place. Note
+        # that this will lead to runtime errors if an outdated training state object is
+        # operated on.
+        donate_argnums=(0,),
+    )
+    def train_step(
+        self, minibatch: jnp.ndarray
+    ) -> Tuple["TrainState", fifteen.experiments.TensorboardLogData]:
+        """Perform a training step on a single device.
+
+        Returns the updated training state."""
+        return self._train_step(minibatch, is_pmapped=False)
+
+    def _train_step(
+        self,
+        minibatch: jnp.ndarray,
+        is_pmapped: bool,
+    ) -> Tuple["TrainState", fifteen.experiments.TensorboardLogData]:
+        """Helper for generalizing training steps. `is_pmapped` can be used to
+        enable/disable `jax.lax.pmean()` calls used for parameter synchronization."""
+
         # Batch size, token count.
         B = minibatch.shape[0]
         T = self.model.config.block_size
@@ -197,11 +228,13 @@ class TrainState(jdc.EnforcedAnnotationsMixin):
             assert ce_loss.shape == (B, T)
             return jnp.mean(ce_loss), y_pred_logits
 
-        # Backprop + synchronized parameter update.
+        # Backprop + parameter update.
         (loss, y_pred_logits), grads = jax.value_and_grad(compute_loss, has_aux=True)(
             self.params
         )
-        grads = jax.lax.pmean(grads, axis_name="device")
+        if is_pmapped:
+            # Synchronize gradients across devices.
+            grads = jax.lax.pmean(grads, axis_name="device")
         updates, optimizer_state_new = self.optimizer_unit_lr.update(
             grads, self.optimizer_state, self.params
         )
@@ -210,8 +243,8 @@ class TrainState(jdc.EnforcedAnnotationsMixin):
         # loss.
         #
         # Somewhat strong assumption: we always use the same batch and token counts. We
-        # could also explicitly track the token count, but when implemented naively this
-        # overflows pretty quickly.
+        # could also explicitly track the token count, but when implemented naively
+        # (with a uint32) this overflows pretty quickly.
         learning_rate = self.optimizer_config.lr_scheduler(
             n_tokens=jnp.array(self.steps, dtype=jnp.float32) * B * T
         )
@@ -229,11 +262,12 @@ class TrainState(jdc.EnforcedAnnotationsMixin):
             },
         )
 
-        # Synchronize scalars across devices.
-        log_data = fifteen.experiments.TensorboardLogData(
-            scalars=jax.lax.pmean(log_data.scalars, axis_name="device"),
-            histograms=log_data.histograms,
-        )
+        if is_pmapped:
+            # Synchronize scalars across devices.
+            log_data = fifteen.experiments.TensorboardLogData(
+                scalars=jax.lax.pmean(log_data.scalars, axis_name="device"),
+                histograms=log_data.histograms,
+            )
 
         # Return updated state.
         with jdc.copy_and_mutate(self) as state_new:

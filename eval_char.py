@@ -2,7 +2,7 @@
 
 import dataclasses
 import pathlib
-from typing import Any, Dict, Tuple, Union, cast
+from typing import Dict, Tuple, cast
 
 import dcargs
 import fifteen
@@ -11,10 +11,7 @@ import numpy as onp
 from jax import numpy as jnp
 from tqdm.auto import tqdm
 
-from mingpt import trainer
-from train_char import make_train_state
-
-PRNGKey = Union[Any, jnp.ndarray]
+from mingpt import model, trainer
 
 
 @dataclasses.dataclass
@@ -28,7 +25,7 @@ def sample(
     train_state: trainer.TrainState,
     initial_conditioner: onp.ndarray,
     steps: int,
-    prng_key: PRNGKey,
+    prng_key: jax.random.KeyArray,
     temperature: float = 1.0,
     sample_from_top_k: int = 1,
 ) -> onp.ndarray:
@@ -77,8 +74,8 @@ def sample(
 
 @jax.jit
 def sample_from_logits(
-    logits: jnp.ndarray, prng_key: PRNGKey
-) -> Tuple[jnp.ndarray, PRNGKey]:
+    logits: jnp.ndarray, prng_key: jax.random.KeyArray
+) -> Tuple[jnp.ndarray, jax.random.KeyArray]:
     """Helper for categorical sampling + propagating PRNG keys."""
 
     assert len(logits.shape) == 1
@@ -92,9 +89,12 @@ def main(args: Args):
     ).assert_exists()
 
     # Read model metadata.
-    block_size = experiment.read_metadata("block_size", int)
     stoi: Dict[str, int] = experiment.read_metadata("stoi", dict)
     itos: Dict[int, str] = experiment.read_metadata("itos", dict)
+    optimizer_config = experiment.read_metadata(
+        "optimizer_config", trainer.OptimizerConfig
+    )
+    gpt_config = experiment.read_metadata("gpt_config", model.GPTConfig)
 
     def index_array_from_string(string: str) -> onp.ndarray:
         return onp.array([stoi[char] for char in string], dtype=onp.int32)
@@ -104,7 +104,11 @@ def main(args: Args):
         return "".join([itos[idx] for idx in array])
 
     # Restore training state.
-    train_state = make_train_state(vocab_size=len(stoi), block_size=block_size)
+    train_state = trainer.TrainState.initialize(
+        seed=0,
+        gpt_config=gpt_config,
+        optimizer_config=optimizer_config,
+    )
     train_state = experiment.restore_checkpoint(train_state)
     print("Loaded checkpoint at step:", train_state.steps)
 
