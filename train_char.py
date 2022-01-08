@@ -31,6 +31,9 @@ class TrainArgs:
         n_layer=8,
         embd_dim=512,
         embd_pdrop=0.1,
+        chunk_attention=False,
+        q_chunk_size=None,
+        kv_chunk_size=None,
     )
     optimizer_config: trainer.OptimizerConfig = trainer.OptimizerConfig(
         learning_rate=6e-4,
